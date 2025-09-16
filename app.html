@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://js.puter.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com; img-src 'self' data: blob:; object-src 'self'">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama Interface</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <style>
+        :root {
+            --bg-primary: #1a202c;
+            --bg-secondary: #2d3748;
+            --bg-tertiary: #4a5568;
+            --text-primary: #f7fafc;
+            --text-secondary: #e2e8f0;
+            --accent-color: #4299e1;
+            --border-color: #4a5568;
+        }
+        body {
+            background-color: var(--bg-primary); color: var(--text-primary);
+            font-family: 'Inter', sans-serif; margin: 0; height: 100vh;
+            display: flex; flex-direction: column;
+        }
+        .chat-container {
+            border-color: var(--border-color); flex-grow: 1; display: flex;
+            flex-direction: column; overflow: hidden;
+        }
+        #chat-messages {
+            flex-grow: 1; overflow-y: auto; padding: 1.5rem; display: flex;
+            flex-direction: column; gap: 1rem;
+        }
+        .message-base {
+            padding: 0.75rem; border-radius: 0.5rem; max-width: 80%;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            word-wrap: break-word; width: fit-content; opacity: 1;
+            transition: opacity 0.5s ease-out;
+        }
+        .message-base.fade-out { opacity: 0; }
+        .message-user {
+            background-color: var(--bg-tertiary); align-self: flex-end; margin-left: auto;
+        }
+        .message-bot {
+            background-color: var(--bg-tertiary);
+        }
+        .message-bot.typing::after {
+            content: '▍'; display: inline-block; margin-left: 2px;
+            animation: blink 1s infinite step-start; vertical-align: baseline;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .bot-message-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            align-self: flex-start;
+            width: fit-content;
+            max-width: 80%;
+        }
+
+        /* --- СТИЛИ ДЛЯ БЛОКОВ РАССУЖДЕНИЯ И ОТВЕТА --- */
+        .thinking-block {
+            background-color: rgba(45, 55, 72, 0.7); /* --bg-secondary with transparency */
+            border: 1px solid var(--border-color);
+            border-radius: 0.375rem;
+            margin-top: 0.75rem;
+            overflow: hidden;
+        }
+        .thinking-header {
+            padding: 0.5rem 0.75rem;
+            background-color: rgba(74, 85, 104, 0.5); /* --bg-tertiary with transparency */
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9em;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        .thinking-header .fa-chevron-down {
+            transition: transform 0.2s ease-in-out;
+        }
+        .thinking-block.collapsed .fa-chevron-down {
+            transform: rotate(-90deg);
+        }
+        .thinking-content {
+            padding: 0.75rem;
+            font-size: 0.9em;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 300px;
+            overflow-y: auto;
+            display: block;
+        }
+        .thinking-block.collapsed .thinking-content {
+            display: none;
+        }
+        .bot-answer-content {
+            margin-top: 0.75rem;
+        }
+        .bot-answer-content:empty {
+            margin-top: 0;
+        }
+        /* --- КОНЕЦ СТИЛЕЙ ДЛЯ БЛОКОВ --- */
+
+        .message-bot pre, .message-user pre {
+            margin-top: 0.75em;
+            margin-bottom: 0.75em;
+            border-radius: 6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            position: relative;
+            display: inline-block;
+            max-width: 100%;
+            text-align: left;
+        }
+
+        .message-bot code:not(pre > code),
+        .message-user code:not(pre > code) {
+            background-color: rgba(255, 255, 255, 0.1); padding: 0.2em 0.4em;
+            margin: 0 0.2em; border-radius: 3px; font-size: 0.9em;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+        }
+
+        .modal-overlay { background-color: rgba(0, 0, 0, 0.7); }
+        .modal-content { background-color: var(--bg-secondary); }
+        input, textarea, select {
+            background-color: var(--bg-tertiary); color: var(--text-primary);
+            border: 1px solid var(--border-color); padding: 0.5rem 0.75rem;
+            border-radius: 0.375rem; width: 100%; box-sizing: border-box;
+        }
+        input::placeholder, textarea::placeholder { color: var(--text-secondary); opacity: 0.7; }
+        input:focus, textarea:focus, select:focus {
+            outline: none; border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px rgba(66, 153, 225, 0.5);
+        }
+        .btn {
+            padding: 0.5rem 1rem; border-radius: 0.375rem; font-weight: 600; cursor: pointer;
+            transition: background-color 0.2s ease-in-out, opacity 0.2s ease-in-out;
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+            white-space: nowrap;
+        }
+        .btn-primary { background-color: var(--accent-color); color: white; border: none; }
+        .btn-primary:hover:not(:disabled) { background-color: #3182ce; }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-secondary { background-color: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); }
+        .btn-secondary:hover:not(:disabled) { background-color: #4a5568; }
+        .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-danger { background-color: #e53e3e; color: white; border: none; }
+        .btn-danger:hover:not(:disabled) { background-color: #c53030; }
+        .token-counter { color: var(--text-secondary); }
+        .token-counter .text-yellow-400 { color: #f6e05e !important; }
+        .token-counter .text-red-400 { color: #fc8181 !important; }
+        .model-indicator, .prompt-indicator {
+            background-color: var(--bg-tertiary); color: var(--text-secondary);
+            padding: 0.25rem 0.75rem; border-radius: 9999px; white-space: nowrap;
+        }
+        .model-indicator .font-medium { color: var(--accent-color); }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        .control-panel {
+            background-color: var(--bg-secondary); border-top: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+        .input-area {
+             background-color: var(--bg-secondary); border-top: 1px solid var(--border-color);
+             flex-shrink: 0;
+        }
+        #message-input { resize: none; }
+
+        .bot-answer-content img, .bot-answer-content svg {
+            max-width: 100%;
+            height: auto;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: #1f2937;
+        }
+        .img-toolbar {
+            display: flex; gap: 0.5rem; margin-top: 0.5rem;
+        }
+
+        .copy-button-container {
+            margin-top: 0.75rem;
+        }
+        .copy-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            color: var(--text-secondary);
+            background-color: transparent;
+            border: none;
+            padding: 0.2rem 0.1rem;
+            cursor: pointer;
+            font-size: 0.9em;
+            opacity: 0.75;
+            transition: opacity 0.2s ease-in-out, color 0.2s ease-in-out;
+        }
+        .copy-button:hover:not(:disabled) {
+            opacity: 1;
+            color: var(--text-primary);
+        }
+        .copy-button i {
+            font-size: 1em;
+            line-height: 1;
+        }
+        .copy-button:disabled {
+            cursor: default;
+            opacity: 1;
+        }
+        .copy-button:disabled i.fa-check {
+             color: var(--accent-color);
+        }
+
+        .copy-code-button {
+            position: absolute;
+            bottom: 6px;
+            right: 6px;
+            padding: 4px 8px;
+            font-size: 0.8em;
+            background-color: var(--bg-tertiary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease-in-out, visibility 0s 0.2s, background-color 0.2s ease-in-out;
+            z-index: 1;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        .message-bot pre:hover .copy-code-button,
+        .message-user pre:hover .copy-code-button {
+            opacity: 0.85;
+            visibility: visible;
+            transition-delay: 0s;
+        }
+        .copy-code-button:hover:not(:disabled) {
+            opacity: 1 !important;
+            background-color: var(--accent-color);
+            color: white;
+        }
+        .copy-code-button i {
+            font-size: 0.9em;
+        }
+        .copy-code-button:disabled {
+            opacity: 1 !important;
+            cursor: default;
+        }
+        .copy-code-button:disabled i.fa-check {
+             color: var(--accent-color);
+        }
+
+
+        @media (max-width: 768px) {
+            .control-panel { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+            .control-panel > div { justify-content: center; }
+            .modal-content { max-width: 95%; }
+            .message-base { max-width: 90%; }
+            .bot-message-wrapper { max-width: 90%; }
+        }
+    </style>
+</head>
+<body class="dark-theme">
+
+<header class="bg-gray-800 py-3 px-6 border-b border-gray-700 flex-shrink-0">
+    <h1 class="text-xl font-bold text-blue-400">Ollama</h1>
+</header>
+
+<main class="chat-container">
+    <div id="chat-messages"></div>
+    <div class="input-area p-4">
+        <div class="flex space-x-3 items-end">
+            <textarea id="message-input" placeholder="Введите ваше сообщение..." rows="1"
+                   class="flex-1 px-4 py-2 rounded-lg bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 border-gray-600 scrollbar-hide"
+                   style="min-height: 44px; max-height: 150px; overflow-y: auto;"></textarea>
+
+            <div class="flex flex-col items-center space-y-1 self-end mb-px">
+                <button id="attach-btn" class="btn btn-secondary px-3 py-2 rounded-lg w-full" title="Прикрепить изображение">
+                    <i class="fas fa-paperclip"></i>
+                </button>
+                <button id="send-btn" class="btn btn-primary px-5 py-2 rounded-lg w-full">
+                    <i class="fas fa-paper-plane"></i>
+                </button>
+                <button id="stop-btn" class="btn btn-danger px-5 py-2 rounded-lg w-full hidden" title="Остановить генерацию">
+                    <i class="fas fa-stop"></i>
+                </button>
+            </div>
+        </div>
+        <div id="image-previews" class="mt-3 flex flex-wrap gap-2 hidden"></div>
+        <input type="file" id="image-input" accept="image/*" class="hidden" multiple>
+    </div>
+</main>
+
+<div class="control-panel p-3 flex flex-wrap justify-between items-center gap-2">
+    <div class="flex space-x-2">
+        <button id="settings-btn" class="btn btn-secondary px-3 py-1 text-sm"><i class="fas fa-cog mr-1"></i><span>Настройки</span></button>
+        <button id="prompt-btn" class="btn btn-secondary px-3 py-1 text-sm"><i class="fas fa-book mr-1"></i><span>Промпт</span></button>
+        <button id="clear-btn" class="btn btn-secondary px-3 py-1 text-sm"><i class="fas fa-trash-alt mr-1"></i><span>Очистить</span></button>
+    </div>
+    <div class="flex items-center space-x-3 text-sm">
+        <div class="model-indicator"><span>Модель:</span> <span id="current-model" class="font-medium">...</span></div>
+        <div class="prompt-indicator"><span>Промпт:</span> <span id="current-prompt">...</span></div>
+        <div class="token-counter"><span>Токены:</span> <span id="token-count">0</span></div>
+    </div>
+</div>
+
+<div id="settings-modal" class="fixed inset-0 z-50 flex items-center justify-center modal-overlay hidden">
+    <div class="modal-content rounded-lg w-full max-w-md p-6 mx-4 shadow-xl">
+        <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-600"><h2 class="text-xl font-bold">Настройки</h2><button id="close-settings" class="text-gray-400 hover:text-white text-2xl leading-none">×</button></div>
+        <div class="space-y-4">
+            <div class="pt-2"><label class="block mb-2 font-semibold">НАСТРОЙКИ МОДЕЛИ</label>
+                <div class="space-y-3">
+                    <div><label for="temperature" class="block text-sm mb-1 text-gray-300">ТЕМПЕРАТУРА:</label><input type="number" id="temperature" name="temperature" value="0.1" step="0.1" min="0" max="2"></div>
+                    <div><label for="max-tokens-input" class="block text-sm mb-1 text-gray-300">МАКС. ТОКЕНЫ (UI):</label><input type="number" id="max-tokens-input" name="max-tokens-input" value="128000" step="1000" min="1000"></div>
+                    <div><label for="max-history-messages-input" class="block text-sm mb-1 text-gray-300">МАКС. СООБЩЕНИЙ В ИСТОРИИ:</label><input type="number" id="max-history-messages-input" name="max-history-messages-input" value="20" step="1" min="1"></div>
+                    <div>
+                        <label for="model-select" class="block text-sm mb-1 text-gray-300">МОДЕЛЬ:</label>
+                        <div class="flex items-center space-x-2">
+                            <select id="model-select" name="model-select" class="flex-1">
+                                <option value="qwen3:30b">qwen3:30b</option>
+                                
+                            </select>
+                            <button id="delete-model-btn" class="btn btn-danger px-3 py-2" title="Удалить выбранную модель">
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="model-download-input" class="block text-sm mb-1 text-gray-300">СКАЧАТЬ МОДЕЛЬ:</label>
+                        <div class="flex space-x-2">
+                            <input type="text" id="model-download-input" name="model-download-input" placeholder="например, llama3:latest" class="flex-1">
+                            <button id="model-download-btn" class="btn btn-secondary">Скачать</button>
+                        </div>
+                        <div id="model-download-status" class="text-sm text-gray-400 mt-2"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="pt-2"><label class="block mb-2 font-semibold">НАСТРОЙКИ ИНТЕРФЕЙСА</label>
+                <div class="space-y-3">
+                    <div>
+                        <label for="font-size-setting" class="block text-sm mb-1 text-gray-300">БАЗОВЫЙ РАЗМЕР ШРИФТА (px):</label>
+                        <input type="number" id="font-size-setting" name="font-size-setting" value="12" step="1" min="12" max="20">
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-600">
+            <button id="cancel-settings" class="btn btn-secondary">Отмена</button>
+            <button id="save-settings" class="btn btn-primary">OK</button>
+        </div>
+    </div>
+</div>
+
+<div id="prompt-modal" class="fixed inset-0 z-50 flex items-center justify-center modal-overlay hidden">
+    <div class="modal-content rounded-lg w-full max-w-2xl p-6 mx-4 shadow-xl">
+        <div class="flex justify-between items-center mb-4 pb-3 border-b border-gray-600"><h2 class="text-xl font-bold">Управление промптами</h2><button id="close-prompt" class="text-gray-400 hover:text-white text-2xl leading-none">×</button></div>
+        <div class="space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label for="prompt-name-1" class="block mb-1 text-sm font-medium text-gray-300">Название промпта 1</label><input type="text" id="prompt-name-1" name="prompt-name-1" class="mb-2" placeholder="Название"><label for="prompt-desc-1" class="block mb-1 text-sm font-medium text-gray-300">Описание промпта 1</label><textarea id="prompt-desc-1" name="prompt-desc-1" class="h-32 resize-none" placeholder="Описание"></textarea></div><div><label for="prompt-name-2" class="block mb-1 text-sm font-medium text-gray-300">Название промпта 2</label><input type="text" id="prompt-name-2" name="prompt-name-2" class="mb-2" placeholder="Название"><label for="prompt-desc-2" class="block mb-1 text-sm font-medium text-gray-300">Описание промпта 2</label><textarea id="prompt-desc-2" name="prompt-desc-2" class="h-32 resize-none" placeholder="Описание"></textarea></div><div><label for="prompt-name-3" class="block mb-1 text-sm font-medium text-gray-300">Название промпта 3</label><input type="text" id="prompt-name-3" name="prompt-name-3" class="mb-2" placeholder="Название"><label for="prompt-desc-3" class="block mb-1 text-sm font-medium text-gray-300">Описание промпта 3</label><textarea id="prompt-desc-3" name="prompt-desc-3" class="h-32 resize-none" placeholder="Описание"></textarea></div><div><label for="prompt-name-4" class="block mb-1 text-sm font-medium text-gray-300">Название промпта 4</label><input type="text" id="prompt-name-4" name="prompt-name-4" class="mb-2" placeholder="Название"><label for="prompt-desc-4" class="block mb-1 text-sm font-medium text-gray-300">Описание промпта 4</label><textarea id="prompt-desc-4" name="prompt-desc-4" class="h-32 resize-none" placeholder="Описание"></textarea></div></div>
+            <div class="pt-2"><label for="active-prompt-select" class="block mb-1 text-sm font-medium text-gray-300">Выберите активный промпт</label><select id="active-prompt-select" name="active-prompt-select"><option value="none">Без промпта</option><option value="prompt-1">Промпт 1</option><option value="prompt-2">Промпт 2</option><option value="prompt-3">Промпт 3</option><option value="prompt-4">Промпт 4</option></select></div>
+        </div>
+        <div class="flex justify-end space-x-3 mt-6 pt-4 border-t border-gray-600">
+            <button id="cancel-prompt" class="btn btn-secondary">Отмена</button>
+            <button id="save-prompt" class="btn btn-primary">Сохранить</button>
+        </div>
+    </div>
+</div>
+
+
+<script>
+    // --- DOM Elements ---
+    const settingsBtn = document.getElementById('settings-btn');
+    const promptBtn = document.getElementById('prompt-btn');
+    const sendBtn = document.getElementById('send-btn');
+    const stopBtn = document.getElementById('stop-btn'); // Added
+    const attachBtn = document.getElementById('attach-btn');
+    const imageInput = document.getElementById('image-input');
+    const imagePreviews = document.getElementById('image-previews');
+    const clearBtn = document.getElementById('clear-btn');
+    const messageInput = document.getElementById('message-input');
+    const chatMessages = document.getElementById('chat-messages');
+    const settingsModal = document.getElementById('settings-modal');
+    const promptModal = document.getElementById('prompt-modal');
+    const closeSettings = document.getElementById('close-settings');
+    const closePrompt = document.getElementById('close-prompt');
+    const cancelSettings = document.getElementById('cancel-settings');
+    const cancelPrompt = document.getElementById('cancel-prompt');
+    const saveSettingsBtn = document.getElementById('save-settings');
+    const savePromptBtn = document.getElementById('save-prompt');
+    const currentModelEl = document.getElementById('current-model');
+    const currentPromptEl = document.getElementById('current-prompt');
+    const tokenCountEl = document.getElementById('token-count');
+    const modelSelect = document.getElementById('model-select');
+    const maxTokensInput = document.getElementById('max-tokens-input');
+    const maxHistoryMessagesInput = document.getElementById('max-history-messages-input');
+    const activePromptSelect = document.getElementById('active-prompt-select');
+    const temperatureInput = document.getElementById('temperature');
+    const fontSizeSettingInput = document.getElementById('font-size-setting');
+    const modelDownloadInput = document.getElementById('model-download-input');
+    const modelDownloadBtn = document.getElementById('model-download-btn');
+    const modelDownloadStatus = document.getElementById('model-download-status');
+    const deleteModelBtn = document.getElementById('delete-model-btn');
+    
+
+    // --- State ---
+    const modelSpecificSettings = {
+        
+    };
+    const settings = { 
+        model: 'qwen3:30b', 
+        temperature: 0.1, 
+        prompt: 'Все рассуждения и ответы должны быть строго на русском языке. Если внутренние рассуждения происходят на другом языке, они должны быть переведены на русский язык перед представлением. Пиши и отвечай в естественной, человеческой, русскоязычной манере, избегая «ИИ-тона» — чрезмерно правильных, формальных и шаблонных конструкций. Исключай длинные тире (—), лишние кавычки (« »), канцеляризмы и корпоративный жаргон. Используй понятные, живые выражения и уместный разговорный жаргон, если он помогает донести смысл. Избегай повторяющихся фраз и чрезмерно сложных оборотов. Варьируй длину и ритм предложений, приближая текст к естественной речи. Приоритет — смысловая ясность, индивидуальный стиль и практическая ценность в каждом предложении. Каждое предложение должно быть осознанным, а не механически сгенерированным.', 
+        promptName: null, 
+        prompts: {}, 
+        theme:'dark', 
+        fontSize: '12',
+        
+        chatHistory: [],
+        maxHistoryMessages: 20 // Default to 20 messages for history
+    };
+    let isStreaming = false, attachedImages = [], abortController = null; // Modified
+
+    // --- Functions ---
+
+    async function updateModelList() {
+        try {
+            const models = await window.electronAPI.getModels();
+            const currentModel = modelSelect.value;
+            modelSelect.innerHTML = '';
+            if (models && models.length > 0) {
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.name;
+                    option.textContent = model.name;
+                    modelSelect.appendChild(option);
+                });
+                if (models.some(m => m.name === currentModel)) {
+                    modelSelect.value = currentModel;
+                } else if (models.length > 0) {
+                    modelSelect.value = models[0].name;
+                }
+            }
+            updateUI();
+        } catch (error) {
+            console.error('Failed to update model list:', error);
+            addSystemMessage('Не удалось обновить список моделей.', true);
+        }
+    }
+
+    deleteModelBtn.addEventListener('click', async () => {
+        const modelName = modelSelect.value;
+        if (!modelName) {
+            addSystemMessage('Выберите модель для удаления.', true);
+            return;
+        }
+
+        if (confirm(`Вы уверены, что хотите удалить модель "${modelName}"? Это действие необратимо.`)) {
+            addSystemMessage(`Удаление модели: ${modelName}...`);
+            try {
+                const result = await window.electronAPI.deleteModel(modelName);
+                if (result.success) {
+                    addSystemMessage(`Модель ${modelName} успешно удалена!`, false, 5000);
+                    await updateModelList();
+                } else {
+                    addSystemMessage(`Ошибка удаления модели: ${result.error}`, true);
+                }
+            } catch (error) {
+                addSystemMessage(`Ошибка: ${error.message}`, true);
+            }
+        }
+    });
+
+    modelDownloadBtn.addEventListener('click', async () => {
+        const modelName = modelDownloadInput.value.trim();
+        if (!modelName) {
+            addSystemMessage('Введите имя модели для скачивания.', true);
+            return;
+        }
+
+        modelDownloadStatus.textContent = `Начинается скачивание модели: ${modelName}...`;
+        modelDownloadBtn.disabled = true;
+        modelDownloadInput.disabled = true;
+
+        try {
+            const result = await window.electronAPI.downloadModel(modelName);
+            if (result.success) {
+                modelDownloadStatus.textContent = `Модель ${modelName} успешно скачана!`;
+                modelDownloadInput.value = '';
+                await updateModelList();
+                // Обновляем список моделей в настройках
+                settings.model = modelName;
+                await window.electronAPI.saveSettings(settings);
+            } else {
+                modelDownloadStatus.textContent = `Ошибка скачивания: ${result.error}`;
+            }
+        } catch (error) {
+            modelDownloadStatus.textContent = `Ошибка: ${error.message}`;
+        } finally {
+            modelDownloadBtn.disabled = false;
+            modelDownloadInput.disabled = false;
+        }
+    });
+
+    window.electronAPI.onDownloadProgress(progress => {
+        modelDownloadStatus.textContent = progress;
+    });
+
+    function applyFontSize(size) {
+        const newSize = parseFloat(size);
+        document.documentElement.style.fontSize = (!isNaN(newSize) && newSize >= 12 && newSize <= 24) ? `${newSize}px` : '12px';
+    }
+
+    settingsBtn.addEventListener('click', openSettingsModal);
+    promptBtn.addEventListener('click', openPromptModal);
+    sendBtn.addEventListener('click', handleSend);
+    stopBtn.addEventListener('click', () => { // Added
+        if (abortController) {
+            abortController.abort();
+            addSystemMessage('Запрос на остановку отправлен.', false, 3000);
+        }
+    });
+    attachBtn.addEventListener('click', () => imageInput.click());
+    imageInput.addEventListener('change', handleImageSelection);
+    clearBtn.addEventListener('click', clearChatUI);
+    messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+        autoResizeTextarea(e.target);
+    });
+    messageInput.addEventListener('input', () => autoResizeTextarea(messageInput));
+    closeSettings.addEventListener('click', closeSettingsModal);
+    closePrompt.addEventListener('click', closePromptModal);
+    cancelSettings.addEventListener('click', closeSettingsModal);
+    cancelPrompt.addEventListener('click', closePromptModal);
+    saveSettingsBtn.addEventListener('click', saveSettingsHandler);
+    savePromptBtn.addEventListener('click', savePromptHandler);
+
+    modelSelect.addEventListener('change', async (event) => {
+        const selectedModel = event.target.value;
+        settings.model = selectedModel;
+        const specificSettings = modelSpecificSettings[selectedModel];
+
+        if (specificSettings && specificSettings.temperature !== undefined) {
+            temperatureInput.value = specificSettings.temperature;
+            temperatureInput.disabled = true;
+            addSystemMessage(`Для модели ${selectedModel} применена специальная температура: ${specificSettings.temperature}.`, false, 4000);
+        } else {
+            temperatureInput.value = settings.temperature;
+            temperatureInput.disabled = false;
+        }
+        
+        // Сохраняем настройки при изменении модели
+        await window.electronAPI.saveSettings(settings);
+    });
+
+    function autoResizeTextarea(textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
+    }
+
+    async function openSettingsModal() {
+        const selectedModel = settings.model;
+        const specificSettings = modelSpecificSettings[selectedModel];
+
+        if (specificSettings && specificSettings.temperature !== undefined) {
+            temperatureInput.value = specificSettings.temperature;
+            temperatureInput.disabled = true;
+        } else {
+            temperatureInput.value = settings.temperature;
+            temperatureInput.disabled = false;
+        }
+
+        maxTokensInput.value = settings.maxTokens || 128000;
+        maxHistoryMessagesInput.value = settings.maxHistoryMessages || 20;
+        modelSelect.value = settings.model;
+        fontSizeSettingInput.value = settings.fontSize;
+        
+        
+        settingsModal.classList.remove('hidden');
+    }
+    function closeSettingsModal() { settingsModal.classList.add('hidden'); }
+
+    function openPromptModal() {
+        for (let i = 1; i <= 4; i++) {
+            document.getElementById(`prompt-name-${i}`).value = settings.prompts[`prompt-${i}`]?.name || '';
+            document.getElementById(`prompt-desc-${i}`).value = settings.prompts[`prompt-${i}`]?.description || '';
+        }
+        activePromptSelect.value = settings.promptName || 'none';
+        promptModal.classList.remove('hidden');
+     }
+    function closePromptModal() { promptModal.classList.add('hidden'); }
+
+    async function saveSettingsHandler() {
+        const newFontSize = parseFloat(fontSizeSettingInput.value);
+        if (isNaN(newFontSize) || newFontSize < 12 || newFontSize > 24) {
+            return addSystemMessage('Ошибка: Некорректный размер шрифта (12-24px).', true);
+        }
+        if (!temperatureInput.disabled) {
+            settings.temperature = parseFloat(temperatureInput.value);
+        }
+        settings.maxTokens = parseInt(maxTokensInput.value);
+        settings.maxHistoryMessages = parseInt(maxHistoryMessagesInput.value);
+        settings.model = modelSelect.value;
+        settings.fontSize = newFontSize;
+        
+        await window.electronAPI.saveSettings(settings);
+        
+        
+        applyFontSize(settings.fontSize);
+        updateUI(); 
+        closeSettingsModal();
+        addSystemMessage('Настройки успешно сохранены!', false, 5000);
+    }
+
+    async function savePromptHandler() {
+        for (let i = 1; i <= 4; i++) {
+            settings.prompts[`prompt-${i}`] = {
+                name: document.getElementById(`prompt-name-${i}`).value.trim(),
+                description: document.getElementById(`prompt-desc-${i}`).value.trim()
+            };
+        }
+        settings.promptName = activePromptSelect.value;
+        settings.prompt = settings.promptName !== 'none' ? settings.prompts[settings.promptName]?.description || '' : '';
+         
+        await window.electronAPI.savePrompts(settings.prompts);
+        await window.electronAPI.saveSettings(settings);
+
+        updateUI(); 
+        closePromptModal();
+        addSystemMessage('Промпты успешно сохранены!', false, 5000);
+    }
+
+    async function clearChatUI() {
+        if (isStreaming) return addSystemMessage("Пожалуйста, дождитесь завершения текущего ответа.", true);
+        chatMessages.innerHTML = '';
+        messageInput.value = '';
+        autoResizeTextarea(messageInput);
+        settings.chatHistory = [];
+        await window.electronAPI.saveSettings(settings);
+        updateUI();
+        addSystemMessage(`Чат очищен.`, false, 3000);
+    }
+
+    function scrollToBottom() {
+        setTimeout(() => { chatMessages.scrollTop = chatMessages.scrollHeight; }, 50);
+    }
+
+    function approximateTokenCount(content) {
+        if (!content) return 0;
+        if (typeof content === 'string') return Math.ceil(content.length / 3.5);
+        if (Array.isArray(content)) return content.reduce((acc, part) => acc + (part.type === 'text' ? Math.ceil(part.text.length / 3.5) : 85), 0);
+        return 0;
+    }
+
+    function updateTokenCount() {
+        const historyTokens = settings.chatHistory.reduce((acc, msg) => acc + approximateTokenCount(msg.content), 0);
+        tokenCountEl.textContent = Math.round(historyTokens);
+    }
+
+    function updateUI() {
+        const selectedOption = Array.from(modelSelect.options).find(opt => opt.value === settings.model);
+        currentModelEl.textContent = selectedOption ? selectedOption.text : settings.model;
+        currentPromptEl.textContent = settings.promptName !== 'none' ? settings.prompts[settings.promptName]?.name || 'Без промпта' : 'Без промпта';
+        updateTokenCount();
+    }
+
+    function copyToClipboard(text, btn) {
+        navigator.clipboard.writeText(text).then(() => {
+            const icon = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check"></i>';
+            setTimeout(() => { btn.innerHTML = icon; }, 1500);
+        });
+    }
+
+    function escapeHtml(unsafe) {
+        return String(unsafe ?? '').replace(/[&<"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#0x27;' })[m]);
+    }
+
+    function buildUserMessageHTMLFromContent(content) {
+        if (!Array.isArray(content)) return `<p>${escapeHtml(content)}</p>`;
+        return content.map(part => {
+            if (part.type === 'text') return `<p>${escapeHtml(part.text)}</p>`;
+            if (part.type === 'image_url') return `<img src="${escapeHtml(part.image_url.url)}" class="max-w-xs rounded-md mb-2">`;
+            return '';
+        }).join('');
+    }
+
+    function renderFinalAnswer(contentDiv, fullResponse) {
+        if (!contentDiv) return;
+        const text = String(fullResponse ?? '');
+        try {
+            contentDiv.innerHTML = marked.parse(text);
+            contentDiv.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+                const pre = block.parentElement;
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-code-button';
+                copyBtn.innerHTML = '<i class="fa-regular fa-copy mr-1"></i><span>Код</span>';
+                copyBtn.onclick = (e) => { e.stopPropagation(); copyToClipboard(block.textContent, copyBtn); };
+                pre.appendChild(copyBtn);
+            });
+        } catch (e) {
+            contentDiv.textContent = text;
+        }
+    }
+
+    function addBotMessage(modelName) {
+        const id = `bot-${Date.now()}`;
+        const html = `<div class="bot-message-wrapper">
+                        <div id="${id}" class="message-base message-bot">
+                            <div class="flex justify-between items-start mb-1">
+                                <div class="font-bold" style="color: #68D391;">Ассистент (${modelName})</div>
+                                <button class="copy-button -mr-2 -mt-1" title="Копировать ответ"><i class="far fa-copy"></i></button>
+                            </div>
+                            
+                            <!-- Блок рассуждений -->
+                            <div class="thinking-block">
+                                <div class="thinking-header">
+                                    <span>✨ Рассуждения</span>
+                                    <i class="fas fa-chevron-down"></i>
+                                </div>
+                                <div class="thinking-content"></div>
+                            </div>
+
+                            <!-- Блок для финального ответа -->
+                            <div class="bot-answer-content"></div>
+                        </div>
+                    </div>`;
+        chatMessages.insertAdjacentHTML('beforeend', html);
+        scrollToBottom();
+        
+        const newMsg = document.getElementById(id);
+        
+        // Логика сворачивания блока рассуждений
+        const thinkingHeader = newMsg.querySelector('.thinking-header');
+        const thinkingBlock = newMsg.querySelector('.thinking-block');
+        thinkingHeader.addEventListener('click', () => {
+            thinkingBlock.classList.toggle('collapsed');
+        });
+
+        // Логика кнопки копирования
+        const copyBtn = newMsg.querySelector('.copy-button');
+        const finalAnswerDiv = newMsg.querySelector('.bot-answer-content');
+        if (copyBtn && finalAnswerDiv) {
+            copyBtn.onclick = () => copyToClipboard(finalAnswerDiv.textContent, copyBtn);
+        }
+        
+        return newMsg;
+    }
+
+    function addUserMessage(html) {
+        chatMessages.insertAdjacentHTML('beforeend', `<div class="message-base message-user">${html}</div>`);
+        scrollToBottom();
+    }
+
+    function handleImageSelection(event) {
+        const files = event.target.files;
+        if (!files || files.length === 0) return;
+        
+        // Создаем массив для новых изображений
+        const newImages = [];
+        let processedCount = 0;
+        
+        // Обрабатываем все выбранные файлы
+        Array.from(files).forEach((file, index) => {
+            if (file && file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    newImages[index] = String(e.target.result);
+                    processedCount++;
+                    
+                    // Когда все изображения загружены, добавляем их к attachedImages
+                    if (processedCount === files.length) {
+                        // Фильтруем undefined значения и добавляем к существующим изображениям
+                        const validImages = newImages.filter(img => img !== undefined);
+                        attachedImages = [...attachedImages, ...validImages];
+                        renderImagePreviews();
+                    }
+                };
+                reader.readAsDataURL(file);
+            } else {
+                processedCount++;
+                // Проверяем, все ли файлы обработаны
+                if (processedCount === files.length) {
+                    const validImages = newImages.filter(img => img !== undefined);
+                    if (validImages.length > 0) {
+                        attachedImages = [...attachedImages, ...validImages];
+                        renderImagePreviews();
+                    }
+                }
+            }
+        });
+    }
+
+    function renderImagePreviews() {
+        imagePreviews.innerHTML = '';
+        if (!attachedImages.length) {
+            imagePreviews.classList.add('hidden');
+            return;
+        }
+        imagePreviews.classList.remove('hidden');
+        attachedImages.forEach((dataUrl, idx) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'relative';
+            wrap.innerHTML = `
+                <img src="${dataUrl}" alt="attachment-${idx+1}" style="max-width: 120px; max-height: 120px; border-radius: 6px; border: 1px solid var(--border-color);">
+                <button class="remove-img-btn absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center shadow" title="Удалить изображение">
+                    <i class="fas fa-times"></i>
+                </button>`;
+            wrap.querySelector('.remove-img-btn').addEventListener('click', () => {
+                // Удаляем конкретное изображение по индексу
+                removeAttachedImage(idx);
+            });
+            imagePreviews.appendChild(wrap);
+        });
+    }
+
+    function hideAttachment() {
+        attachedImages = [];
+        renderImagePreviews();
+    }
+
+    // Функция для удаления конкретного изображения из списка
+    function removeAttachedImage(index) {
+        if (index >= 0 && index < attachedImages.length) {
+            attachedImages.splice(index, 1);
+            renderImagePreviews();
+        }
+    }
+
+    async function handleSend() {
+        const originalText = messageInput.value.trim();
+        if ((!originalText && attachedImages.length === 0) || isStreaming) return;
+
+        isStreaming = true;
+        sendBtn.classList.add('hidden');
+        attachBtn.classList.add('hidden');
+        stopBtn.classList.remove('hidden');
+
+        abortController = new AbortController(); // Create new controller for this request
+
+        const displayContent = [{ type: 'text', text: originalText }, ...attachedImages.map(img => ({ type: 'image_url', image_url: { url: img } }))];
+        const aiContent = [{ type: 'text', text: originalText }, ...attachedImages.map(img => ({ type: 'image_url', image_url: { url: img } }))];
+
+        addUserMessage(buildUserMessageHTMLFromContent(displayContent));
+        settings.chatHistory.push({ role: 'user', content: aiContent });
+
+        hideAttachment();
+        messageInput.value = '';
+        updateUI();
+
+        const botMsgEl = addBotMessage(settings.model);
+        const thinkingDiv = botMsgEl.querySelector('.thinking-content');
+        const finalAnswerDiv = botMsgEl.querySelector('.bot-answer-content');
+        let fullResponse = '';
+
+        try {
+            const ollamaEndpoint = 'http://localhost:11434/api/chat';
+            const specificSettings = modelSpecificSettings[settings.model];
+            const chatTemperature = (specificSettings && specificSettings.temperature !== undefined)
+                ? specificSettings.temperature
+                : settings.temperature;
+
+            // --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+            // Корректно форматируем всю историю для API
+            // Ограничиваем историю сообщений, чтобы не превышать контекстное окно модели
+            const limitedChatHistory = settings.chatHistory.slice(-settings.maxHistoryMessages);
+            const messagesForApi = limitedChatHistory.map(msg => {
+                if (msg.role === 'assistant') {
+                    return { role: 'assistant', content: msg.content };
+                }
+
+                if (msg.role === 'user' && Array.isArray(msg.content)) {
+                    const textPart = msg.content.find(p => p.type === 'text')?.text || '';
+                    const imageParts = msg.content
+                        .filter(p => p.type === 'image_url' && p.image_url.url)
+                        .map(p => p.image_url.url.split(',')[1]); // Получаем только base64 часть
+
+                    const userMessage = { role: 'user', content: textPart };
+                    if (imageParts.length > 0) {
+                        userMessage.images = imageParts;
+                    }
+                    return userMessage;
+                }
+                return msg; // Возвращаем как есть, если формат неожиданный
+            });
+
+            const messages = [
+                ...(settings.prompt ? [{role:'system', content: settings.prompt}] : []),
+                ...messagesForApi // Используем отформатированную историю
+            ];
+            // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+            const body = {
+                model: settings.model,
+                messages: messages,
+                temperature: chatTemperature,
+                stream: true
+            };
+
+            const response = await fetch(ollamaEndpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: abortController.signal // Added signal
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Ollama API: ${response.status} - ${errorText}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const jsonLines = chunk.split('\n').filter(line => line.trim() !== '');
+
+                for (const line of jsonLines) {
+                    try {
+                        const parsed = JSON.parse(line);
+                        if (parsed.message && parsed.message.content) {
+                            fullResponse += parsed.message.content;
+                            if (thinkingDiv) {
+                                thinkingDiv.textContent = fullResponse + ' ▍';
+                                thinkingDiv.scrollTop = thinkingDiv.scrollHeight; // Автопрокрутка блока рассуждений
+                            }
+                            scrollToBottom();
+                        }
+                        if (parsed.done) break;
+                    } catch (e) {
+                        console.error('Ошибка парсинга JSON из потока Ollama:', line);
+                    }
+                }
+            }
+            settings.chatHistory.push({ role: 'assistant', content: fullResponse });
+
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                fullResponse += '\n\n[Остановлено пользователем]';
+                addSystemMessage('Генерация была остановлена.', false, 4000);
+            } else {
+                fullResponse = `Ошибка: ${e.message || 'Неизвестная ошибка'}`;
+            }
+        } finally {
+            if (thinkingDiv) {
+                thinkingDiv.textContent = fullResponse; // Показываем полный сырой ответ в рассуждениях
+            }
+
+            let finalAnswerText = fullResponse;
+            const thinkTagEnd = fullResponse.lastIndexOf('</think>');
+
+            if (thinkTagEnd !== -1) {
+                finalAnswerText = fullResponse.substring(thinkTagEnd + '</think>'.length).trim();
+            }
+
+            renderFinalAnswer(finalAnswerDiv, finalAnswerText);
+
+            isStreaming = false;
+            sendBtn.classList.remove('hidden');
+            attachBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+            abortController = null;
+            updateUI();
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        await updateModelList();
+        const initialData = await window.electronAPI.loadInitialData();
+        if (initialData) {
+            Object.assign(settings, initialData);
+            // Не обнуляем историю при каждом запуске, сохраняем её
+            if (!settings.chatHistory) {
+                settings.chatHistory = [];
+            }
+            // Ensure prompts are properly structured if they are missing
+            if (!settings.prompts) {
+                settings.prompts = {
+                    'prompt-1': { name: '', description: '' },
+                    'prompt-2': { name: '', description: '' },
+                    'prompt-3': { name: '', description: '' },
+                    'prompt-4': { name: '', description: '' }
+                };
+            }
+        } else {
+            // Fallback for first time run or if data is corrupted
+            settings.chatHistory = [];
+            settings.prompts = {
+                'prompt-1': { name: '', description: '' },
+                'prompt-2': { name: '', description: '' },
+                'prompt-3': { name: '', description: '' },
+                'prompt-4': { name: '', description: '' }
+            };
+        }
+
+        applyFontSize(settings.fontSize);
+        modelSelect.value = settings.model;
+        temperatureInput.value = settings.temperature;
+        fontSizeSettingInput.value = settings.fontSize;
+        activePromptSelect.value = settings.promptName || 'none';
+        updateUI();
+        marked.setOptions({ gfm: true, breaks: false, sanitize: false });
+        addSystemMessage("Интерфейс загружен.", false, 5000);
+        scrollToBottom();
+    });
+
+    function addSystemMessage(text, isError = false, duration = null) {
+        const messageElement = document.createElement('div');
+        messageElement.className = `message-base p-2 rounded-md max-w-xl lg:max-w-3xl text-sm ${isError ? 'bg-red-800 text-red-100' : 'bg-gray-600 text-gray-200'} mx-auto my-2 text-center shadow`;
+        messageElement.innerHTML = `<p><i class="fas ${isError ? 'fa-exclamation-circle text-red-300' : 'fa-info-circle text-blue-300'} mr-2"></i>${escapeHtml(text)}</p>`;
+        chatMessages.appendChild(messageElement);
+        scrollToBottom();
+        if (duration > 0) {
+            setTimeout(() => {
+                messageElement.classList.add('fade-out');
+                setTimeout(() => messageElement.remove(), 500);
+            }, duration);
+        }
+    }
+</script>
+</body>
+</html>
